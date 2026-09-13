@@ -1,0 +1,5 @@
+{
+  "Mode": "both",
+  "ReloadOnLeave": true,
+  "ApplyDelaySeconds": 0.35
+}

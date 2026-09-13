@@ -1,0 +1,12 @@
+{
+  "MapTokens": [
+    "3171695956",
+    "cabin"
+  ],
+  "Plugins": [
+    {
+      "Name": "ZombieCabinDefence",
+      "UnloadAs": "Zombie Cabin Defense"
+    }
+  ]
+}

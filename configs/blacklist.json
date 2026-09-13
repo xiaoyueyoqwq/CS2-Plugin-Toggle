@@ -1,0 +1,24 @@
+{
+  "MapTokens": [
+    "3171695956",
+    "cabin"
+  ],
+  "Plugins": [
+    {
+      "Name": "BotBuy",
+      "UnloadAs": "BotBuyPatch"
+    },
+    {
+      "Name": "BotOrders",
+      "UnloadAs": ""
+    },
+    {
+      "Name": "BotRandomizer",
+      "UnloadAs": ""
+    },
+    {
+      "Name": "BotChat",
+      "UnloadAs": ""
+    }
+  ]
+}
