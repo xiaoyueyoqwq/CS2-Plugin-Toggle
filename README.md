@@ -1,18 +1,20 @@
 # CS2-Plugin-Toggle
 
-按地图名卸载或恢复指定 CounterStrikeSharp 插件。匹配的是 `Server.MapName` 子串（工坊图一般为 `workshop/<id>/<bsp>`），不是整个 custom 模式。
+**English** · [简体中文](README.zh-CN.md)
 
-1.1.0 起配置拆成三个文件，黑名单和白名单可以同时生效。
+Unload or restore specified CounterStrikeSharp plugins by map name. Matching uses a `Server.MapName` substring (workshop maps are typically `workshop/<id>/<bsp>`), not the whole custom mode.
 
-## 安装
+From 1.1.0 the config is split into three files. Blacklist and whitelist can be active at the same time.
 
-把 `PluginToggle.dll`（及同目录 `PluginToggle.pdb` / `PluginToggle.deps.json`）放到：
+## Install
+
+Put `PluginToggle.dll` (and `PluginToggle.pdb` / `PluginToggle.deps.json` in the same directory) in:
 
 ```text
 addons/counterstrikesharp/plugins/PluginToggle/
 ```
 
-重启 CS2，或空服 `css_plugins reload PluginToggle`。配置目录：
+Restart CS2, or on an empty server run `css_plugins reload PluginToggle`. Config directory:
 
 ```text
 addons/counterstrikesharp/configs/plugins/PluginToggle/
@@ -21,11 +23,11 @@ addons/counterstrikesharp/configs/plugins/PluginToggle/
   whitelist.json
 ```
 
-首次启动若仍有旧的 `PluginToggle.json`，会把它迁成黑名单，并写出默认 `config.json` / `whitelist.json`，旧文件改名为 `PluginToggle.json.bak`。
+On first start, if a legacy `PluginToggle.json` is still present, it is migrated into the blacklist and default `config.json` / `whitelist.json` are written. The old file is renamed to `PluginToggle.json.bak`.
 
-仓库 `configs/` 下是示例，不会自动拷到服务器。
+The `configs/` directory in this repo is an example. It is not copied to the server automatically.
 
-## 配置
+## Config
 
 ### `config.json`
 
@@ -37,31 +39,31 @@ addons/counterstrikesharp/configs/plugins/PluginToggle/
 }
 ```
 
-- `Mode`：`blacklist` / `whitelist` / `both`（默认 `both`）
-- `ReloadOnLeave`：黑名单离开匹配图时，是否 load 回本次卸过的插件
-- `ApplyDelaySeconds`：保留字段。实际在 `OnServerPreWorldUpdate` 里应用，不按这个秒数等
+- `Mode`: `blacklist` / `whitelist` / `both` (default `both`)
+- `ReloadOnLeave`: when leaving a blacklist-matched map, whether to load back plugins unloaded this session
+- `ApplyDelaySeconds`: reserved. Apply actually happens in `OnServerPreWorldUpdate`, not after this many seconds
 
 ### `blacklist.json`
 
-命中 `MapTokens` 时卸载 `Plugins`。离开匹配图且 `ReloadOnLeave` 为 true 时，只 load 本次卸过的项。
+On a `MapTokens` hit, unload `Plugins`. When leaving a matched map and `ReloadOnLeave` is true, only those unloaded this session are loaded back.
 
-默认：Cabin In The Woods（`3171695956` / `cabin`）上卸载 BotBuy、BotOrders、BotRandomizer、BotChat。
+Default: on Cabin In The Woods (`3171695956` / `cabin`), unload BotBuy, BotOrders, BotRandomizer, BotChat.
 
 ### `whitelist.json`
 
-命中 `MapTokens` 时保留（若先前卸过则 load 回来）。**未命中**时卸载。这些插件只允许在匹配图上跑。
+On a `MapTokens` hit, keep them (load back if previously unloaded). On a **miss**, unload them. These plugins are only allowed to run on matched maps.
 
-默认：`ZombieCabinDefence`，`UnloadAs` 必须是 `Zombie Cabin Defense`。
+Default: `ZombieCabinDefence`; `UnloadAs` must be `Zombie Cabin Defense`.
 
-### 插件字段
+### Plugin fields
 
-- `Name`：`css_plugins load` 用的插件目录名
-- `UnloadAs`：`css_plugins unload` 用的 ModuleName；空则与 `Name` 相同（BotBuy 是 `BotBuyPatch`）
+- `Name`: plugin directory name used by `css_plugins load`
+- `UnloadAs`: ModuleName used by `css_plugins unload`; empty means the same as `Name` (BotBuy is `BotBuyPatch`)
 
-同一插件写进两份清单会被跳过并打日志。NeverTouch（BotAI、BotAimImprover、BotController、CS2-Switch-Gamemode 等）写了也无效。native 卸不掉。
+A plugin listed in both files is skipped and logged. NeverTouch (BotAI, BotAimImprover, BotController, CS2-Switch-Gamemode, etc.) is ignored even if listed. Native plugins cannot be unloaded.
 
-## 命令
+## Commands
 
-控制台 `css_plugintoggle`（`@css/generic`）打印 mode、当前图、两份 match / held / tokens。
+Console `css_plugintoggle` (`@css/generic`) prints mode, current map, and both match / held / tokens.
 
-`css_plugintoggle reload` 重读三个文件并按当前图再应用一次。
+`css_plugintoggle reload` rereads the three files and applies again for the current map.
