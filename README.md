@@ -4,7 +4,7 @@
 
 Unload or restore specified CounterStrikeSharp plugins by map name. Matching uses a `Server.MapName` substring (workshop maps are typically `workshop/<id>/<bsp>`), not the whole custom mode.
 
-From 1.1.0 the config is split into three files. Blacklist and whitelist can be active at the same time.
+From 1.1.0 the config is split into three files. Blacklist and whitelist can be active at the same time. 1.2.0 adds an optional mode profile layer (`profiles.json`) on top of the map lists.
 
 ## Install
 
@@ -21,6 +21,7 @@ addons/counterstrikesharp/configs/plugins/PluginToggle/
   config.json
   blacklist.json
   whitelist.json
+  profiles.json
 ```
 
 On first start, if a legacy `PluginToggle.json` is still present, it is migrated into the blacklist and default `config.json` / `whitelist.json` are written. The old file is renamed to `PluginToggle.json.bak`.
@@ -60,10 +61,24 @@ Default: `ZombieCabinDefence`; `UnloadAs` must be `Zombie Cabin Defense`.
 - `Name`: plugin directory name used by `css_plugins load`
 - `UnloadAs`: ModuleName used by `css_plugins unload`; empty means the same as `Name` (BotBuy is `BotBuyPatch`)
 
-A plugin listed in both files is skipped and logged. NeverTouch (BotAI, BotAimImprover, BotController, CS2-Switch-Gamemode, etc.) is ignored even if listed. Native plugins cannot be unloaded.
+A plugin listed in both the map blacklist and map whitelist is skipped and logged. The same applies inside one profile. Map lists and profile lists may overlap; unload wins.
+
+NeverTouch (BotAI, BotAimImprover, BotController, CS2-Switch-Gamemode, AdminPlus, etc.) is ignored on the map layer even if listed. Native plugins cannot be unloaded. The profile layer may unload AdminPlus; other NeverTouch names still skip.
+
+### `profiles.json`
+
+Optional. Missing file is written as `{ "Profiles": {} }` (same as 1.1.0). Example `funmatch` profile is in this repo's `configs/` and is not copied automatically.
+
+When the active profile name matches a key, that profile's blacklist is unloaded and its whitelist is loaded. When the name is empty or does not match, previously unloaded blacklist plugins are restored and whitelist plugins are unloaded.
+
+The profile name is in memory only. It does not survive process restart. `css_plugintoggle reload` rereads files and keeps the current name.
+
+Map rules and profile rules are computed into one desired set, then unload runs before load.
 
 ## Commands
 
-Console `css_plugintoggle` (`@css/generic`) prints mode, current map, and both match / held / tokens.
+Console `css_plugintoggle` (`@css/generic`) prints mode, current map, profile, and both match / held / tokens.
 
-`css_plugintoggle reload` rereads the three files and applies again for the current map.
+`css_plugintoggle reload` rereads the four files, keeps the profile name, and applies again for the current map.
+
+`css_plugintoggle profile <name>` stores the profile name (`-` or empty clears it). It does not apply until the next map start or `reload`, so a gamemode plugin can set the name and `changelevel` in the same tick.

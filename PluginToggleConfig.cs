@@ -131,6 +131,71 @@ public sealed class PluginToggleSettings
     };
 }
 
+public sealed class PluginToggleProfile
+{
+    [JsonPropertyName("Blacklist")]
+    public List<PluginToggleTarget> Blacklist { get; set; } = [];
+
+    [JsonPropertyName("Whitelist")]
+    public List<PluginToggleTarget> Whitelist { get; set; } = [];
+
+    public void Normalize()
+    {
+        Blacklist = PluginToggleList.NormalizePlugins(Blacklist);
+        Whitelist = PluginToggleList.NormalizePlugins(Whitelist);
+    }
+}
+
+public sealed class PluginToggleProfilesFile
+{
+    [JsonPropertyName("Profiles")]
+    public Dictionary<string, PluginToggleProfile> Profiles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public void Normalize()
+    {
+        var next = new Dictionary<string, PluginToggleProfile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in Profiles ?? new Dictionary<string, PluginToggleProfile>())
+        {
+            var key = (pair.Key ?? "").Trim();
+            if (key.Length == 0 || pair.Value == null)
+                continue;
+            pair.Value.Normalize();
+            next[key] = pair.Value;
+        }
+
+        Profiles = next;
+    }
+
+    public static PluginToggleProfilesFile Default() => new()
+    {
+        Profiles = new Dictionary<string, PluginToggleProfile>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["funmatch"] = new PluginToggleProfile
+            {
+                Blacklist =
+                [
+                    new() { Name = "AdminPlus" },
+                    new() { Name = "BotBuy", UnloadAs = "BotBuyPatch" },
+                    new() { Name = "BotOrders" },
+                    new() { Name = "BotChat" },
+                    new() { Name = "NadeSystem" },
+                    new() { Name = "Banter" },
+                    new() { Name = "Smarter-Bot" },
+                ],
+                Whitelist =
+                [
+                    new() { Name = "FunMatchPlugin", UnloadAs = "Fun Match Plugin" },
+                ],
+            },
+        },
+    };
+
+    public static PluginToggleProfilesFile Empty() => new()
+    {
+        Profiles = new Dictionary<string, PluginToggleProfile>(StringComparer.OrdinalIgnoreCase),
+    };
+}
+
 internal sealed class LegacyPluginToggleFile
 {
     [JsonPropertyName("MapTokens")]

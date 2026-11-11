@@ -1,0 +1,18 @@
+{
+  "Profiles": {
+    "funmatch": {
+      "Blacklist": [
+        { "Name": "AdminPlus" },
+        { "Name": "BotBuy", "UnloadAs": "BotBuyPatch" },
+        { "Name": "BotOrders" },
+        { "Name": "BotChat" },
+        { "Name": "NadeSystem" },
+        { "Name": "Banter" },
+        { "Name": "Smarter-Bot" }
+      ],
+      "Whitelist": [
+        { "Name": "FunMatchPlugin", "UnloadAs": "Fun Match Plugin" }
+      ]
+    }
+  }
+}

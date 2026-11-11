@@ -12,13 +12,14 @@ namespace PluginToggle;
 public sealed class PluginTogglePlugin : BasePlugin
 {
     public override string ModuleName => "PluginToggle";
-    public override string ModuleDescription => "Unload or load CSS plugins by map using blacklist and whitelist files";
+    public override string ModuleDescription => "Unload or load CSS plugins by map and optional mode profile";
     public override string ModuleAuthor => "xiaoyueyoqwq";
-    public override string ModuleVersion => "1.1.0";
+    public override string ModuleVersion => "1.2.0";
 
     private const string ConfigFileName = "config.json";
     private const string BlacklistFileName = "blacklist.json";
     private const string WhitelistFileName = "whitelist.json";
+    private const string ProfilesFileName = "profiles.json";
     private const string LegacyFileName = "PluginToggle.json";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -50,10 +51,14 @@ public sealed class PluginTogglePlugin : BasePlugin
     private PluginToggleSettings _settings = PluginToggleSettings.Default();
     private PluginToggleList _blacklist = PluginToggleList.DefaultBlacklist();
     private PluginToggleList _whitelist = PluginToggleList.DefaultWhitelist();
+    private Dictionary<string, PluginToggleProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _conflicts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _blacklistHeld = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _whitelistHeld = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _profileBlacklistHeld = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _profileWhitelistHeld = new(StringComparer.OrdinalIgnoreCase);
     private string _lastMap = "";
+    private string _activeProfile = "";
     private bool _blacklistMatch;
     private bool _whitelistMatch;
     private bool _worldApplyArmed;
@@ -78,22 +83,25 @@ public sealed class PluginTogglePlugin : BasePlugin
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
 
         Logger.LogInformation(
-            "PluginToggle {Version} loaded. mode={Mode} blacklist=[{BlTokens}/{BlPlugins}] whitelist=[{WlTokens}/{WlPlugins}] reloadOnLeave={Reload}",
+            "PluginToggle {Version} loaded. mode={Mode} profile='{Profile}' blacklist=[{BlTokens}/{BlPlugins}] whitelist=[{WlTokens}/{WlPlugins}] profiles=[{Profiles}] reloadOnLeave={Reload}",
             ModuleVersion,
             _settings.Mode,
+            _activeProfile,
             string.Join(",", _blacklist.MapTokens),
             string.Join(",", _blacklist.Plugins.Select(p => p.Name)),
             string.Join(",", _whitelist.MapTokens),
             string.Join(",", _whitelist.Plugins.Select(p => p.Name)),
+            string.Join(",", _profiles.Keys),
             _settings.ReloadOnLeave);
     }
 
     public override void OnAllPluginsLoaded(bool hotReload)
     {
         Logger.LogInformation(
-            "OnAllPluginsLoaded hotReload={Hot} map='{Map}'",
+            "OnAllPluginsLoaded hotReload={Hot} map='{Map}' profile='{Profile}'",
             hotReload,
-            Server.MapName ?? "");
+            Server.MapName ?? "",
+            _activeProfile);
         ArmApply(Server.MapName);
     }
 
@@ -120,9 +128,10 @@ public sealed class PluginTogglePlugin : BasePlugin
         _worldApplyArmed = true;
         RegisterListener<Listeners.OnServerPreWorldUpdate>(OnWorldApply);
         Logger.LogInformation(
-            "Waiting for OnServerPreWorldUpdate; pending='{Pending}' server='{Map}'",
+            "Waiting for OnServerPreWorldUpdate; pending='{Pending}' server='{Map}' profile='{Profile}'",
             _pendingMap ?? "",
-            Server.MapName ?? "");
+            Server.MapName ?? "",
+            _activeProfile);
     }
 
     private void OnWorldApply(bool simulating)
@@ -133,8 +142,12 @@ public sealed class PluginTogglePlugin : BasePlugin
 
         _pendingMap = null;
         DisarmWorldApply();
-        Logger.LogInformation("OnServerPreWorldUpdate simulating={Sim} map='{Map}'", simulating, map);
-        ApplyForMap(map);
+        Logger.LogInformation(
+            "OnServerPreWorldUpdate simulating={Sim} map='{Map}' profile='{Profile}'",
+            simulating,
+            map,
+            _activeProfile);
+        Apply(map);
     }
 
     private void DisarmWorldApply()
@@ -145,31 +158,75 @@ public sealed class PluginTogglePlugin : BasePlugin
         RemoveListener<Listeners.OnServerPreWorldUpdate>(OnWorldApply);
     }
 
-    private void ApplyForMap(string mapName)
+    private void Apply(string mapName)
     {
         _lastMap = mapName ?? "";
         DropStaleHeld(_blacklist, _blacklistHeld);
         DropStaleHeld(_whitelist, _whitelistHeld);
+        DropStaleProfileHeld();
+
         _blacklistMatch = IsMatch(_lastMap, _blacklist.MapTokens);
         _whitelistMatch = IsMatch(_lastMap, _whitelist.MapTokens);
+
+        var unload = new Dictionary<string, PluginToggleTarget>(StringComparer.OrdinalIgnoreCase);
+        var load = new Dictionary<string, PluginToggleTarget>(StringComparer.OrdinalIgnoreCase);
+
+        void WantUnload(PluginToggleTarget target, bool profileLayer)
+        {
+            if (IsForbidden(target, profileLayer) || IsConflict(target))
+            {
+                Logger.LogWarning(
+                    "Skipping plugin '{Name}' (unloadAs={UnloadAs}, forbidden={Forbidden}, conflict={Conflict}, profileLayer={ProfileLayer}).",
+                    target.Name,
+                    target.UnloadName,
+                    IsForbidden(target, profileLayer),
+                    IsConflict(target),
+                    profileLayer);
+                return;
+            }
+
+            unload[target.Name] = target;
+            load.Remove(target.Name);
+        }
+
+        void WantLoad(PluginToggleTarget target, bool profileLayer)
+        {
+            if (IsForbidden(target, profileLayer) || IsConflict(target))
+                return;
+            if (unload.ContainsKey(target.Name))
+                return;
+            load[target.Name] = target;
+        }
 
         if (_settings.UsesBlacklist)
         {
             if (_blacklistMatch)
             {
                 Logger.LogInformation("Map '{Map}' matched blacklist; unloading configured plugins.", _lastMap);
-                UnloadList(_blacklist, _blacklistHeld);
+                foreach (var target in _blacklist.Plugins)
+                {
+                    WantUnload(target, profileLayer: false);
+                    if (!IsForbidden(target, false) && !IsConflict(target))
+                        _blacklistHeld.Add(target.Name);
+                }
             }
-            else
+            else if (_settings.ReloadOnLeave)
             {
                 Logger.LogInformation("Map '{Map}' did not match blacklist; restoring held plugins.", _lastMap);
-                if (_settings.ReloadOnLeave)
-                    ReloadHeld(_blacklist, _blacklistHeld);
+                foreach (var target in _blacklist.Plugins)
+                {
+                    if (_blacklistHeld.Contains(target.Name))
+                        WantLoad(target, profileLayer: false);
+                }
             }
         }
         else
         {
-            ReloadHeld(_blacklist, _blacklistHeld);
+            foreach (var target in _blacklist.Plugins)
+            {
+                if (_blacklistHeld.Contains(target.Name))
+                    WantLoad(target, profileLayer: false);
+            }
         }
 
         if (_settings.UsesWhitelist)
@@ -177,17 +234,84 @@ public sealed class PluginTogglePlugin : BasePlugin
             if (_whitelistMatch)
             {
                 Logger.LogInformation("Map '{Map}' matched whitelist; restoring held plugins.", _lastMap);
-                ReloadHeld(_whitelist, _whitelistHeld);
+                foreach (var target in _whitelist.Plugins)
+                {
+                    if (_whitelistHeld.Contains(target.Name))
+                        WantLoad(target, profileLayer: false);
+                }
             }
             else
             {
                 Logger.LogInformation("Map '{Map}' did not match whitelist; unloading configured plugins.", _lastMap);
-                UnloadList(_whitelist, _whitelistHeld);
+                foreach (var target in _whitelist.Plugins)
+                {
+                    WantUnload(target, profileLayer: false);
+                    if (!IsForbidden(target, false) && !IsConflict(target))
+                        _whitelistHeld.Add(target.Name);
+                }
             }
         }
         else
         {
-            ReloadHeld(_whitelist, _whitelistHeld);
+            foreach (var target in _whitelist.Plugins)
+            {
+                if (_whitelistHeld.Contains(target.Name))
+                    WantLoad(target, profileLayer: false);
+            }
+        }
+
+        foreach (var pair in _profiles)
+        {
+            var active = string.Equals(pair.Key, _activeProfile, StringComparison.OrdinalIgnoreCase);
+            var profileHeldBl = HeldFor(_profileBlacklistHeld, pair.Key);
+            var profileHeldWl = HeldFor(_profileWhitelistHeld, pair.Key);
+
+            if (active)
+            {
+                Logger.LogInformation("Profile '{Profile}' active; applying profile lists.", pair.Key);
+                foreach (var target in pair.Value.Blacklist)
+                {
+                    WantUnload(target, profileLayer: true);
+                    if (!IsForbidden(target, true) && !IsConflict(target))
+                        profileHeldBl.Add(target.Name);
+                }
+
+                foreach (var target in pair.Value.Whitelist)
+                    WantLoad(target, profileLayer: true);
+            }
+            else
+            {
+                foreach (var target in pair.Value.Blacklist)
+                {
+                    if (profileHeldBl.Contains(target.Name))
+                        WantLoad(target, profileLayer: true);
+                }
+
+                foreach (var target in pair.Value.Whitelist)
+                {
+                    WantUnload(target, profileLayer: true);
+                    if (!IsForbidden(target, true) && !IsConflict(target))
+                        profileHeldWl.Add(target.Name);
+                }
+            }
+        }
+
+        foreach (var target in unload.Values)
+        {
+            Logger.LogInformation("css_plugins unload {UnloadAs} (load={Name})", target.UnloadName, target.Name);
+            Server.ExecuteCommand($"css_plugins unload \"{Escape(target.UnloadName)}\"");
+        }
+
+        foreach (var target in load.Values)
+        {
+            Logger.LogInformation("css_plugins load {Name}", target.Name);
+            Server.ExecuteCommand($"css_plugins load \"{Escape(target.Name)}\"");
+            _blacklistHeld.Remove(target.Name);
+            _whitelistHeld.Remove(target.Name);
+            foreach (var held in _profileBlacklistHeld.Values)
+                held.Remove(target.Name);
+            foreach (var held in _profileWhitelistHeld.Values)
+                held.Remove(target.Name);
         }
     }
 
@@ -205,27 +329,15 @@ public sealed class PluginTogglePlugin : BasePlugin
         return false;
     }
 
-    private void UnloadList(PluginToggleList list, HashSet<string> held)
+    private static HashSet<string> HeldFor(Dictionary<string, HashSet<string>> store, string profile)
     {
-        foreach (var target in list.Plugins)
+        if (!store.TryGetValue(profile, out var held))
         {
-            if (IsForbidden(target) || IsConflict(target))
-            {
-                Logger.LogWarning(
-                    "Skipping plugin '{Name}' (unloadAs={UnloadAs}, forbidden={Forbidden}, conflict={Conflict}).",
-                    target.Name,
-                    target.UnloadName,
-                    IsForbidden(target),
-                    IsConflict(target));
-                continue;
-            }
-
-            if (!held.Add(target.Name))
-                continue;
-
-            Logger.LogInformation("css_plugins unload {UnloadAs} (load={Name})", target.UnloadName, target.Name);
-            Server.ExecuteCommand($"css_plugins unload \"{Escape(target.UnloadName)}\"");
+            held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            store[profile] = held;
         }
+
+        return held;
     }
 
     private void DropStaleHeld(PluginToggleList list, HashSet<string> held)
@@ -242,33 +354,66 @@ public sealed class PluginTogglePlugin : BasePlugin
         }
     }
 
-    private void ReloadHeld(PluginToggleList list, HashSet<string> held)
+    private void DropStaleProfileHeld()
     {
-        if (held.Count == 0)
-            return;
-
-        foreach (var target in list.Plugins)
+        foreach (var profile in _profileBlacklistHeld.Keys.ToList())
         {
-            if (!held.Contains(target.Name))
-                continue;
-            if (IsForbidden(target) || IsConflict(target))
-                continue;
+            if (!_profiles.TryGetValue(profile, out var def))
+            {
+                foreach (var name in _profileBlacklistHeld[profile])
+                {
+                    Logger.LogInformation("css_plugins load {Name} (removed profile {Profile})", name, profile);
+                    Server.ExecuteCommand($"css_plugins load \"{Escape(name)}\"");
+                }
 
-            Logger.LogInformation("css_plugins load {Name}", target.Name);
-            Server.ExecuteCommand($"css_plugins load \"{Escape(target.Name)}\"");
+                _profileBlacklistHeld.Remove(profile);
+                continue;
+            }
+
+            DropStaleNames(def.Blacklist, _profileBlacklistHeld[profile]);
         }
 
-        held.Clear();
+        foreach (var profile in _profileWhitelistHeld.Keys.ToList())
+        {
+            if (!_profiles.TryGetValue(profile, out var def))
+            {
+                _profileWhitelistHeld.Remove(profile);
+                continue;
+            }
+
+            DropStaleNames(def.Whitelist, _profileWhitelistHeld[profile], loadRemoved: false);
+        }
     }
 
-    private bool IsForbidden(PluginToggleTarget target)
+    private void DropStaleNames(List<PluginToggleTarget> plugins, HashSet<string> held, bool loadRemoved = true)
+    {
+        var names = new HashSet<string>(plugins.Select(p => p.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var name in held.Where(n => !names.Contains(n)).ToList())
+        {
+            if (loadRemoved)
+            {
+                Logger.LogInformation("css_plugins load {Name} (removed from profile list)", name);
+                Server.ExecuteCommand($"css_plugins load \"{Escape(name)}\"");
+            }
+
+            held.Remove(name);
+        }
+    }
+
+    private bool IsForbidden(PluginToggleTarget target, bool profileLayer)
     {
         if (string.Equals(target.Name, ModuleName, StringComparison.OrdinalIgnoreCase))
             return true;
         if (string.Equals(target.UnloadName, ModuleName, StringComparison.OrdinalIgnoreCase))
             return true;
+        if (profileLayer && IsAdminPlus(target))
+            return false;
         return NeverTouch.Contains(target.Name) || NeverTouch.Contains(target.UnloadName);
     }
+
+    private static bool IsAdminPlus(PluginToggleTarget target) =>
+        string.Equals(target.Name, "AdminPlus", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(target.UnloadName, "AdminPlus", StringComparison.OrdinalIgnoreCase);
 
     private bool IsConflict(PluginToggleTarget target) =>
         _conflicts.Contains(target.Name) || _conflicts.Contains(target.UnloadName);
@@ -276,40 +421,45 @@ public sealed class PluginTogglePlugin : BasePlugin
     private void RebuildConflicts()
     {
         _conflicts.Clear();
-        var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        void AddKeys(PluginToggleList list, string side)
+        void FlagPair(IEnumerable<PluginToggleTarget> blacklist, IEnumerable<PluginToggleTarget> whitelist, string label)
         {
-            foreach (var target in list.Plugins)
+            var black = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var target in blacklist)
             {
-                Remember(target.Name, side);
-                if (!string.Equals(target.UnloadName, target.Name, StringComparison.OrdinalIgnoreCase))
-                    Remember(target.UnloadName, side);
+                if (target.Name.Length > 0)
+                    black.Add(target.Name);
+                if (target.UnloadName.Length > 0)
+                    black.Add(target.UnloadName);
+            }
+
+            foreach (var target in whitelist)
+            {
+                if (black.Contains(target.Name) || black.Contains(target.UnloadName))
+                {
+                    if (target.Name.Length > 0)
+                        _conflicts.Add(target.Name);
+                    if (target.UnloadName.Length > 0)
+                        _conflicts.Add(target.UnloadName);
+                    Logger.LogWarning("Plugin '{Key}' is in both blacklist and whitelist ({Label}); skipping it.", target.Name, label);
+                }
             }
         }
 
-        void Remember(string key, string side)
-        {
-            if (string.IsNullOrWhiteSpace(key))
-                return;
-            if (!seen.TryGetValue(key, out var existing))
-            {
-                seen[key] = side;
-                return;
-            }
-
-            if (string.Equals(existing, side, StringComparison.OrdinalIgnoreCase))
-                return;
-
-            _conflicts.Add(key);
-            Logger.LogWarning("Plugin '{Key}' is in both blacklist and whitelist; skipping it.", key);
-        }
-
-        AddKeys(_blacklist, "blacklist");
-        AddKeys(_whitelist, "whitelist");
+        FlagPair(_blacklist.Plugins, _whitelist.Plugins, "map");
+        foreach (var pair in _profiles)
+            FlagPair(pair.Value.Blacklist, pair.Value.Whitelist, $"profile {pair.Key}");
     }
 
     private static string Escape(string name) => name.Replace("\"", "");
+
+    private static string NormalizeProfileName(string? raw)
+    {
+        var name = (raw ?? "").Trim();
+        if (name.Length == 0 || name == "-")
+            return "";
+        return name;
+    }
 
     private bool TryLoadFiles(out string error)
     {
@@ -326,10 +476,14 @@ public sealed class PluginTogglePlugin : BasePlugin
                 ?? PluginToggleList.DefaultBlacklist();
             _whitelist = ReadJson<PluginToggleList>(Path.Combine(ConfigDir, WhitelistFileName))
                 ?? PluginToggleList.DefaultWhitelist();
+            var profilesFile = ReadJson<PluginToggleProfilesFile>(Path.Combine(ConfigDir, ProfilesFileName))
+                ?? PluginToggleProfilesFile.Empty();
 
             _settings.Normalize();
             _blacklist.Normalize();
             _whitelist.Normalize();
+            profilesFile.Normalize();
+            _profiles = profilesFile.Profiles;
             RebuildConflicts();
             return true;
         }
@@ -340,6 +494,7 @@ public sealed class PluginTogglePlugin : BasePlugin
             _settings.Normalize();
             _blacklist = new PluginToggleList();
             _whitelist = new PluginToggleList();
+            _profiles = new Dictionary<string, PluginToggleProfile>(StringComparer.OrdinalIgnoreCase);
             _conflicts.Clear();
             return false;
         }
@@ -378,6 +533,8 @@ public sealed class PluginTogglePlugin : BasePlugin
         WriteJson(Path.Combine(ConfigDir, BlacklistFileName), blacklist);
         if (!File.Exists(Path.Combine(ConfigDir, WhitelistFileName)))
             WriteJson(Path.Combine(ConfigDir, WhitelistFileName), PluginToggleList.DefaultWhitelist());
+        if (!File.Exists(Path.Combine(ConfigDir, ProfilesFileName)))
+            WriteJson(Path.Combine(ConfigDir, ProfilesFileName), PluginToggleProfilesFile.Empty());
 
         var bak = legacyPath + ".bak";
         if (File.Exists(bak))
@@ -391,6 +548,7 @@ public sealed class PluginTogglePlugin : BasePlugin
         var configPath = Path.Combine(ConfigDir, ConfigFileName);
         var blacklistPath = Path.Combine(ConfigDir, BlacklistFileName);
         var whitelistPath = Path.Combine(ConfigDir, WhitelistFileName);
+        var profilesPath = Path.Combine(ConfigDir, ProfilesFileName);
 
         if (!File.Exists(configPath))
             WriteJson(configPath, PluginToggleSettings.Default());
@@ -398,6 +556,8 @@ public sealed class PluginTogglePlugin : BasePlugin
             WriteJson(blacklistPath, PluginToggleList.DefaultBlacklist());
         if (!File.Exists(whitelistPath))
             WriteJson(whitelistPath, PluginToggleList.DefaultWhitelist());
+        if (!File.Exists(profilesPath))
+            WriteJson(profilesPath, PluginToggleProfilesFile.Empty());
     }
 
     private static T? ReadJson<T>(string path) where T : class
@@ -434,9 +594,34 @@ public sealed class PluginTogglePlugin : BasePlugin
             }
 
             var map = Server.MapName ?? _lastMap;
-            Logger.LogInformation("css_plugintoggle reload; applying map='{Map}' mode={Mode}", map, _settings.Mode);
+            Logger.LogInformation(
+                "css_plugintoggle reload; applying map='{Map}' mode={Mode} profile='{Profile}'",
+                map,
+                _settings.Mode,
+                _activeProfile);
             if (!string.IsNullOrEmpty(map))
-                ApplyForMap(map);
+                Apply(map);
+            ReplyStatus(command);
+            return;
+        }
+
+        if (sub.Equals("profile", StringComparison.OrdinalIgnoreCase))
+        {
+            var raw = command.ArgCount > 2 ? command.ArgByIndex(2) : "";
+            if (raw.Length == 0)
+            {
+                ReplyStatus(command);
+                return;
+            }
+
+            var next = NormalizeProfileName(raw);
+            if (next.Length > 0 && !_profiles.ContainsKey(next))
+                Logger.LogWarning("css_plugintoggle profile '{Profile}' is not in profiles.json; stored until reload", next);
+
+            _activeProfile = next;
+            Logger.LogInformation("css_plugintoggle profile='{Profile}'", _activeProfile);
+            // Do not apply here: Switch sets the name then changelevel in the same
+            // tick. Apply on OnMapStart / reload so the old round is not touched.
             ReplyStatus(command);
             return;
         }
@@ -447,10 +632,12 @@ public sealed class PluginTogglePlugin : BasePlugin
     private void ReplyStatus(CommandInfo command)
     {
         command.ReplyToCommand(
-            $"[PluginToggle] mode={_settings.Mode} map='{_lastMap}'");
+            $"[PluginToggle] mode={_settings.Mode} map='{_lastMap}' profile='{_activeProfile}'");
         command.ReplyToCommand(
             $"[PluginToggle] blacklist match={_blacklistMatch} held=[{string.Join(",", _blacklistHeld)}] tokens=[{string.Join(",", _blacklist.MapTokens)}]");
         command.ReplyToCommand(
             $"[PluginToggle] whitelist match={_whitelistMatch} held=[{string.Join(",", _whitelistHeld)}] tokens=[{string.Join(",", _whitelist.MapTokens)}]");
+        command.ReplyToCommand(
+            $"[PluginToggle] profiles=[{string.Join(",", _profiles.Keys)}]");
     }
 }
