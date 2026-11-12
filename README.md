@@ -1,6 +1,6 @@
 # CS2-Plugin-Toggle
 
-**English** · [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
 Unload or restore specified CounterStrikeSharp plugins by map name. Matching uses a `Server.MapName` substring (workshop maps are typically `workshop/<id>/<bsp>`), not the whole custom mode.
 
@@ -82,3 +82,18 @@ Console `css_plugintoggle` (`@css/generic`) prints mode, current map, profile, a
 `css_plugintoggle reload` rereads the four files, keeps the profile name, and applies again for the current map.
 
 `css_plugintoggle profile <name>` stores the profile name (`-` or empty clears it). It does not apply until the next map start or `reload`, so a gamemode plugin can set the name and `changelevel` in the same tick.
+
+## Requirements
+
+- CounterStrikeSharp **API ≥ 260** (built against `CounterStrikeSharp.API` 1.0.372)
+- .NET **10**
+
+## Building
+
+```bash
+dotnet build -c Release
+```
+
+## License
+
+[GPL-3.0](LICENSE)

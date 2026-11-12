@@ -1,6 +1,6 @@
 # CS2-Plugin-Toggle
 
-[English](README.md) · **简体中文**
+[English](README.md) | 简体中文
 
 按地图名卸载或恢复指定 CounterStrikeSharp 插件。匹配的是 `Server.MapName` 子串（工坊图一般为 `workshop/<id>/<bsp>`），不是整个 custom 模式。
 
@@ -82,3 +82,18 @@ NeverTouch（BotAI、BotAimImprover、BotController、CS2-Switch-Gamemode、Admi
 `css_plugintoggle reload` 重读四个文件，保留模式名，按当前图再应用一次。
 
 `css_plugintoggle profile <name>` 写入模式名（`-` 或空则清空）。此时不 apply，等下次切图或 `reload`，以便切图插件在同一 tick 里先改名再 `changelevel`。
+
+## 运行要求
+
+- CounterStrikeSharp **API ≥ 260**（构建基于 `CounterStrikeSharp.API` 1.0.372）
+- .NET **10**
+
+## 构建
+
+```bash
+dotnet build -c Release
+```
+
+## 许可证
+
+[GPL-3.0](LICENSE)
